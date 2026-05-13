@@ -185,8 +185,7 @@ class MiMoClient:
         self.base_url = "https://api.xiaomimimo.com/v1"
         self.max_retries = 3
         self.initial_backoff = 2.0
-        from tts import ProfileManager
-        self.profile_manager = profile_manager or ProfileManager()
+        self.profile_manager = profile_manager if profile_manager is not None else ProfileManager()
 
     def synthesize(self, segment: Segment) -> bytes:
         """Synthesize a segment and return WAV bytes."""
@@ -199,7 +198,10 @@ class MiMoClient:
 
         if is_clone:
             profile_name = segment.voice[6:]
-            audio_path = self.profile_manager.get_audio_path(profile_name)
+            try:
+                audio_path = self.profile_manager.get_audio_path(profile_name)
+            except FileNotFoundError as e:
+                raise ValueError(f"Clone profile '{profile_name}' not found: {e}")
             with open(audio_path, "rb") as f:
                 audio_b64 = base64.b64encode(f.read()).decode("utf-8")
             ext = audio_path.suffix.lower()
