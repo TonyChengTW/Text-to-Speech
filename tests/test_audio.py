@@ -44,3 +44,19 @@ def test_convert_to_mp3(mock_audio_segment):
 
     assert result is not None
     mock_wav.export.assert_called_once()
+
+
+@patch("tts.AudioSegment")
+def test_convert_to_mp3_resample(mock_audio_segment):
+    """Test converting WAV to MP3 with different sample rate."""
+    mock_wav = Mock()
+    mock_wav.frame_rate = 44100  # Different from requested sample_rate
+    mock_resampled = Mock()
+    mock_wav.set_frame_rate.return_value = mock_resampled
+    mock_audio_segment.from_file.return_value = mock_wav
+
+    result = convert_to_mp3(b"fake_wav", "/tmp/output.mp3", "192k", 24000)
+
+    assert result is not None
+    mock_wav.set_frame_rate.assert_called_once_with(24000)
+    mock_resampled.export.assert_called_once()
