@@ -189,3 +189,45 @@ def test_main_empty_file():
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
+
+
+def test_parse_clone_tag():
+    content = "[clone:my_voice]\n測試文字\n"
+    segments = parse_text_file(content)
+    assert len(segments) == 1
+    assert segments[0].voice == "clone:my_voice"
+    assert segments[0].text == "測試文字"
+    assert segments[0].style is None
+
+
+def test_parse_clone_tag_with_style():
+    content = "[style:平靜]\n[clone:my_voice]\n測試文字\n"
+    segments = parse_text_file(content)
+    assert len(segments) == 1
+    assert segments[0].voice == "clone:my_voice"
+    assert segments[0].style == "平靜"
+
+
+def test_parse_clone_and_voice_mixing():
+    content = "[clone:voice_a]\n文字A\n[voice:冰糖]\n文字B\n"
+    segments = parse_text_file(content)
+    assert len(segments) == 2
+    assert segments[0].voice == "clone:voice_a"
+    assert segments[1].voice == "冰糖"
+
+
+def test_parse_clone_resets_style():
+    """[clone:X] resets current style, then [style:Y] sets new style."""
+    content = "[style:風格A]\n[clone:voice_a]\n[style:風格B]\n文字\n"
+    segments = parse_text_file(content)
+    assert len(segments) == 1
+    assert segments[0].voice == "clone:voice_a"
+    assert segments[0].style == "風格B"
+
+
+def test_parse_clone_inline_not_treated_as_clone():
+    """Inline [clone:X] on same line as text is treated as text, not clone tag."""
+    content = "[clone:my_voice] 這是文字\n"
+    segments = parse_text_file(content)
+    assert len(segments) == 1
+    assert segments[0].voice == "mimo_default"

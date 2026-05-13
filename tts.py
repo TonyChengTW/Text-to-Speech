@@ -113,6 +113,10 @@ class ProfileManager:
         return (self.profiles_dir / f"{name}.json").exists()
 
 
+def _is_clone_tag_line(line: str) -> bool:
+    return bool(re.match(r"^\[clone:[^\]]+\]$", line.strip()))
+
+
 def parse_text_file(content: str) -> list[Segment]:
     """Parse text file content into segments."""
     segments = []
@@ -144,6 +148,18 @@ def parse_text_file(content: str) -> list[Segment]:
         # Detect [style:X]
         if line.startswith("[style:") and line.endswith("]"):
             current_style = line[7:-1]  # Extract style text
+            continue
+
+        # Detect [clone:X]
+        if _is_clone_tag_line(line):
+            if current_text_lines:
+                segments.append(Segment(
+                    voice=current_voice,
+                    style=current_style,
+                    text="\n".join(current_text_lines)
+                ))
+                current_text_lines = []
+            current_voice = f"clone:{line[7:-1]}"
             continue
 
         # Accumulate text lines
