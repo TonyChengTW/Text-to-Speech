@@ -22,7 +22,7 @@ Add voice cloning (speaker synthesis) support to the MiMo TTS CLI tool. Users re
 
 ```
 profiles/
-├── my_voice.json     # {"name": "my_voice", "audio_file": "my_voice.mp3", "language": "zh", "created_at": "2026-05-13"}
+├── my_voice.json     # {"name": "my_voice", "audio_file": "my_voice.mp3", "created_at": "2026-05-13"}
 ├── my_voice.mp3
 ├── dad.json
 └── dad.wav
@@ -34,10 +34,11 @@ profiles/
 {
   "name": "<string>",
   "audio_file": "<filename.mp3 or filename.wav>",
-  "language": "<zh | en>",
   "created_at": "<YYYY-MM-DD>"
 }
 ```
+
+Note: `name` must be unique. The `audio_file` must be in the same `profiles/` directory.
 
 Profile files must be named `<name>.json`; the audio file is stored alongside in the same `profiles/` directory.
 
@@ -49,8 +50,8 @@ Profile files must be named `<name>.json`; the audio file is stored alongside in
 python tts.py --clone-profile add <name> --audio <path/to/audio.mp3>
 ```
 
-- Validates audio file exists and format is MP3 or WAV
-- Auto-detects language from filename or defaults to `zh`
+- Validates audio file via `pydub.AudioSegment.from_file()` (confirms valid MP3/WAV, not just extension)
+- Copies audio to `profiles/<name>.<ext>` preserving original format
 - Returns error if profile `<name>` already exists
 
 ### List Profiles
@@ -59,7 +60,13 @@ python tts.py --clone-profile add <name> --audio <path/to/audio.mp3>
 python tts.py --clone-profile list
 ```
 
-- Lists all profiles with name, audio file, and creation date
+- Output format (one profile per line):
+  ```
+  python tts.py --clone-profile list
+  # my_voice  | my_voice.mp3 | 2026-05-13
+  # dad        | dad.wav      | 2026-05-12
+  ```
+  Columns: `name | audio_file | created_at`
 
 ### Delete Profile
 
@@ -75,6 +82,12 @@ python tts.py --clone-profile delete <name>
 ### Clone Tag
 
 `[clone:profile_name]` — selects a registered voice clone profile for the following text segment. Resets current style.
+
+**Only line-level `[clone:X]` is supported.** Inline use (e.g., `你好[clone:voice]` as part of a paragraph line) is not parsed as a clone tag — it is treated as regular text.
+
+### Chunking Behavior
+
+`chunk_text()` applies to clone segments identically to built-in voices. Each chunk receives the **same** base64 audio (the clone voice reference is the same for every chunk; the API reconstructs voice quality across all chunks).
 
 ### Mixing with Built-in Voices
 
@@ -108,14 +121,23 @@ The existing `parse_text_file()` function is extended:
 | `Segment.voice` pattern | Model | Voice field |
 |------------------------|-------|-------------|
 | Built-in voice (e.g. `冰糖`, `Milo`) | `mimo-v2.5-tts` | `"voice": "<voice_name>"` |
-| `clone:<name>` | `mimo-v2.5-tts-voiceclone` | `"voice": "data:audio/mpeg;base64,<b64>"` |
+| `clone:<name>` | `mimo-v2.5-tts-voiceclone` | `"voice": "data:audio/mpeg;base64,<b64>"` or `"data:audio/wav;base64,<b64>"` |
 
 ### Base64 Encoding
 
+The MIME type in the data URI must match the actual audio file encoding:
+- MP3 file → `data:audio/mpeg;base64,<b64>`
+- WAV file → `data:audio/wav;base64,<b64>`
+
 ```python
+import pydub
+audio = pydub.AudioSegment.from_file(profile_audio_path)
+# Detect format from file extension
+ext = Path(profile_audio_path).suffix.lower()
+mime = "audio/mpeg" if ext == ".mp3" else "audio/wav"
 with open(profile_audio_path, "rb") as f:
     audio_b64 = base64.b64encode(f.read()).decode("utf-8")
-voice_value = f"data:audio/mpeg;base64,{audio_b64}"  # or audio/wav
+voice_value = f"data:{mime};base64,{audio_b64}"
 ```
 
 ### Message Structure for Clone
@@ -133,18 +155,20 @@ User message can be empty `""` for clone mode, or contain style instructions.
 
 ### 1. ProfileManager
 
-**Location:** `tts.py` (new class, ~80 lines)
+**Location:** `tts.py` (new class, ~120–150 lines)
 
 **Responsibilities:**
-- `add_profile(name, audio_path)` — validate, copy audio, write JSON
-- `list_profiles()` — enumerate `profiles/*.json`
+- `add_profile(name, audio_path)` — validate (pydub), copy audio to `profiles/`, write JSON
+- `list_profiles()` — enumerate `profiles/*.json`, print in list format
 - `delete_profile(name)` — remove both files
 - `get_audio_path(name)` — return full path to audio file for a profile
+- `profile_exists(name)` — check if profile exists
 
 **Edge cases:**
+- `profiles/` directory does not exist → auto-create on first `add`
 - Duplicate profile name → raise error
 - Missing audio file for existing profile → raise error on synthesize
-- Invalid audio format → reject on add
+- Invalid audio format → reject on add with clear message (not just extension check)
 
 ### 2. parse_text_file() — Clone Extension
 
@@ -174,7 +198,7 @@ User message can be empty `""` for clone mode, or contain style instructions.
 |----------|----------|
 | Profile not found for `[clone:X]` | Print warning, skip segment |
 | Audio file missing | Print error with profile name, skip |
-| API error on clone segment | Retry 3x, then raise |
+| API error on clone segment | Retry 3x with exponential backoff (same as existing `synthesize()`), then raise |
 | Invalid audio format | Reject on `add` with clear message |
 
 ## Testing Scope
