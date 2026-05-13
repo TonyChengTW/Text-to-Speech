@@ -80,3 +80,12 @@ def test_parse_empty_segment_skipped():
     segments = parse_text_file(text)
     assert len(segments) == 1
     assert segments[0].voice == "苏打"
+
+
+def test_parse_voice_resets_style():
+    """Test that [voice:] resets style from previous segment."""
+    text = "[voice:冰糖]\n[style:用台灣口音]\n你好\n\n[voice:苏打]\n歡迎回來"
+    segments = parse_text_file(text)
+    assert len(segments) == 2
+    assert segments[0].style == "用台灣口音"
+    assert segments[1].style is None  # Style should be reset

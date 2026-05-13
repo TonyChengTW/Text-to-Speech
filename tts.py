@@ -41,6 +41,7 @@ def parse_text_file(content: str) -> list[Segment]:
                 ))
                 current_text_lines = []
             current_voice = line[7:-1]  # Extract voice name
+            current_style = None  # Reset style for new segment
             continue
 
         # Detect [style:X]
