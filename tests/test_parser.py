@@ -1,5 +1,7 @@
 # tests/test_parser.py
 import pytest
+from unittest.mock import patch, Mock
+from pathlib import Path
 from tts import parse_text_file, Segment
 
 
@@ -89,3 +91,29 @@ def test_parse_voice_resets_style():
     assert len(segments) == 2
     assert segments[0].style == "用台灣口音"
     assert segments[1].style is None  # Style should be reset
+
+
+@patch("tts.MiMoClient")
+@patch("tts.concatenate_wav")
+@patch("tts.convert_to_mp3")
+def test_main_orchestration(mock_mp3, mock_concat, mock_client):
+    """Test main orchestration flow."""
+    mock_instance = Mock()
+    mock_client.return_value = mock_instance
+    mock_instance.synthesize.return_value = b"fake_wav"
+    mock_concat.return_value = b"combined_wav"
+    mock_mp3.return_value = Path("/tmp/output.mp3")
+
+    from tts import main
+    import sys
+
+    test_args = ["tts.py", "sample.txt", "--api-key", "test-key"]
+    with patch.object(sys, "argv", test_args):
+        mock_content = "[voice:冰糖]\n你好"
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "read_text", return_value=mock_content):
+            main()
+
+    mock_instance.synthesize.assert_called_once()
+    mock_concat.assert_called_once()
+    mock_mp3.assert_called_once()

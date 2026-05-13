@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import os
 import random
 import re
 import struct
@@ -225,9 +226,71 @@ def parse_args():
 def main():
     """Main entry point."""
     args = parse_args()
-    print(f"Input: {args.input}")
-    print(f"Model: {args.model}")
-    print(f"Output: {args.output or args.input.with_suffix('.mp3')}")
+
+    api_key = args.api_key or os.environ.get("TTS_API_KEY")
+    if not api_key:
+        print("Error: API key required. Use --api-key or set TTS_API_KEY env var", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.input.exists():
+        print(f"Error: File not found: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    content = args.input.read_text(encoding="utf-8")
+    if not content.strip():
+        print(f"Warning: Empty file: {args.input}", file=sys.stderr)
+        sys.exit(0)
+
+    segments = parse_text_file(content)
+    if not segments:
+        print(f"Warning: No segments found in {args.input}", file=sys.stderr)
+        sys.exit(0)
+
+    client = MiMoClient(api_key=api_key, model=args.model)
+
+    wav_files = []
+    total_time = 0
+
+    for i, segment in enumerate(segments, 1):
+        text_chunks = chunk_text(segment.text, args.chunk_size)
+
+        for chunk in text_chunks:
+            chunk_segment = Segment(
+                voice=segment.voice,
+                style=segment.style,
+                text=chunk
+            )
+
+            if args.verbose:
+                print(f"[{i}/{len(segments)}] {segment.voice}: \"{chunk[:30]}...\"", end="", flush=True)
+
+            start_time = time.time()
+            try:
+                wav_bytes = client.synthesize(chunk_segment)
+                wav_files.append(wav_bytes)
+                elapsed = time.time() - start_time
+                total_time += elapsed
+
+                if args.verbose:
+                    print(f" → OK ({elapsed:.1f}s)")
+
+            except Exception as e:
+                if args.verbose:
+                    print(f" → FAILED: {e}")
+                raise
+
+    if wav_files:
+        combined_wav = concatenate_wav(wav_files)
+        output_path = args.output or args.input.with_suffix(".mp3")
+        convert_to_mp3(combined_wav, str(output_path), args.bitrate, args.sample_rate)
+
+        if args.verbose:
+            print(f"\n[Done] {output_path} ({total_time:.1f}s total, {len(segments)} segments)")
+        else:
+            print(f"Generated: {output_path}")
+    else:
+        print("Warning: No audio generated", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
