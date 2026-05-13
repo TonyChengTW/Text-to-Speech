@@ -3,13 +3,17 @@
 
 import argparse
 import base64
+import random
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from io import BytesIO
+
 import requests
+from pydub import AudioSegment
 
 
 @dataclass
@@ -129,10 +133,46 @@ class MiMoClient:
 
             if attempt < self.max_retries - 1:
                 backoff = self.initial_backoff * (2 ** attempt)
-                jitter = backoff * 0.5 * (2 * (hash(str(attempt)) % 1000) / 1000 - 1)
-                time.sleep(backoff + jitter)
+                sleep_time = random.uniform(0, backoff)
+                time.sleep(sleep_time)
 
         raise last_error
+
+
+def concatenate_wav(wav_list: list[bytes]) -> Optional[bytes]:
+    """Concatenate multiple WAV files into one."""
+    if not wav_list:
+        return None
+
+    if len(wav_list) == 1:
+        return wav_list[0]
+
+    # Load first WAV to get parameters
+    first = AudioSegment.from_file(BytesIO(wav_list[0]), format="wav")
+    combined = first
+
+    # Append remaining WAVs
+    for wav_bytes in wav_list[1:]:
+        audio = AudioSegment.from_file(BytesIO(wav_bytes), format="wav")
+        combined += audio
+
+    # Export to WAV bytes
+    output = BytesIO()
+    combined.export(output, format="wav")
+    return output.getvalue()
+
+
+def convert_to_mp3(wav_bytes: bytes, output_path: str, bitrate: str, sample_rate: int) -> Path:
+    """Convert WAV bytes to MP3 file."""
+    audio = AudioSegment.from_file(BytesIO(wav_bytes), format="wav")
+
+    # Set sample rate if different
+    if audio.frame_rate != sample_rate:
+        audio = audio.set_frame_rate(sample_rate)
+
+    output = Path(output_path)
+    audio.export(output, format="mp3", bitrate=bitrate)
+    return output
 
 
 def parse_args():
