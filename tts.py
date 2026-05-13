@@ -179,12 +179,14 @@ def parse_text_file(content: str) -> list[Segment]:
 class MiMoClient:
     """Client for MiMo TTS API."""
 
-    def __init__(self, api_key: str, model: str = "mimo-v2.5-tts"):
+    def __init__(self, api_key: str, model: str = "mimo-v2.5-tts", profile_manager=None):
         self.api_key = api_key
         self.model = model
         self.base_url = "https://api.xiaomimimo.com/v1"
         self.max_retries = 3
         self.initial_backoff = 2.0
+        from tts import ProfileManager
+        self.profile_manager = profile_manager or ProfileManager()
 
     def synthesize(self, segment: Segment) -> bytes:
         """Synthesize a segment and return WAV bytes."""
@@ -193,12 +195,27 @@ class MiMoClient:
             messages.append({"role": "user", "content": segment.style})
         messages.append({"role": "assistant", "content": segment.text})
 
+        is_clone = segment.voice.startswith("clone:")
+
+        if is_clone:
+            profile_name = segment.voice[6:]
+            audio_path = self.profile_manager.get_audio_path(profile_name)
+            with open(audio_path, "rb") as f:
+                audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+            ext = audio_path.suffix.lower()
+            mime = "audio/mpeg" if ext == ".mp3" else "audio/wav"
+            voice_value = f"data:{mime};base64,{audio_b64}"
+            model_name = "mimo-v2.5-tts-voiceclone"
+        else:
+            voice_value = segment.voice
+            model_name = self.model
+
         payload = {
-            "model": self.model,
+            "model": model_name,
             "messages": messages,
             "audio": {
                 "format": "wav",
-                "voice": segment.voice
+                "voice": voice_value
             }
         }
 

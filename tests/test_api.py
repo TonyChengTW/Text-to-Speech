@@ -1,7 +1,8 @@
 # tests/test_api.py
 import pytest
-from unittest.mock import Mock, patch
-from tts import MiMoClient, Segment
+from unittest.mock import Mock, patch, MagicMock
+from pathlib import Path
+from tts import MiMoClient, Segment, ProfileManager
 
 
 def test_client_initialization():
@@ -90,3 +91,55 @@ def test_synthesize_retry_on_server_error(mock_post):
 
     assert result is not None
     assert mock_post.call_count == 2
+
+
+@patch("tts.requests.post")
+def test_synthesize_clone_segment(mock_post):
+    """Clone segments use voiceclone model with base64 audio."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"audio": {"data": "YWJj"}}}]
+    }
+    mock_post.return_value = mock_response
+
+    mock_pm = Mock()
+    mock_pm.get_audio_path.return_value = Path("/fake/path/test.mp3")
+
+    client = MiMoClient(api_key="test-key", profile_manager=mock_pm)
+    segment = Segment(voice="clone:test", style=None, text="測試")
+
+    mock_file = MagicMock()
+    mock_file.read.return_value = b"fake audio data"
+    mock_file.__enter__ = Mock(return_value=mock_file)
+    mock_file.__exit__ = Mock(return_value=False)
+    with patch("builtins.open", return_value=mock_file):
+        result = client.synthesize(segment)
+
+    assert result is not None
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args
+    assert call_kwargs.kwargs["json"]["model"] == "mimo-v2.5-tts-voiceclone"
+    voice_value = call_kwargs.kwargs["json"]["audio"]["voice"]
+    assert voice_value.startswith("data:audio/mpeg;base64,")
+
+
+@patch("tts.requests.post")
+def test_synthesize_builtin_voice_still_works(mock_post):
+    """Builtin voice segments still use standard model."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"audio": {"data": "YWJj"}}}]
+    }
+    mock_post.return_value = mock_response
+
+    client = MiMoClient(api_key="test-key")
+    segment = Segment(voice="冰糖", style=None, text="測試")
+
+    result = client.synthesize(segment)
+
+    assert result is not None
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["json"]["model"] == "mimo-v2.5-tts"
+    assert mock_post.call_args.kwargs["json"]["audio"]["voice"] == "冰糖"
