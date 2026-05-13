@@ -148,13 +148,23 @@ def concatenate_wav(wav_list: list[bytes]) -> Optional[bytes]:
     if len(wav_list) == 1:
         return wav_list[0]
 
-    combined = b"".join(wav_list)
-    return b"RIFF" + struct.pack("<I", len(combined) + 4) + b"WAVE" + combined
+    first = AudioSegment.from_file(BytesIO(wav_list[0]), format="wav")
+    combined = first
+
+    for wav_bytes in wav_list[1:]:
+        audio = AudioSegment.from_file(BytesIO(wav_bytes), format="wav")
+        combined += audio
+
+    output = BytesIO()
+    combined.export(output, format="wav")
+    return output.getvalue()
 
 
 def convert_to_mp3(wav_bytes: bytes, output_path: str, bitrate: str, sample_rate: int) -> Path:
     """Convert WAV bytes to MP3 file."""
-    audio = AudioSegment.from_wav(BytesIO(wav_bytes))
+    audio = AudioSegment.from_file(BytesIO(wav_bytes), format="wav")
+    if audio.frame_rate != sample_rate:
+        audio = audio.set_frame_rate(sample_rate)
     output = Path(output_path)
     audio.export(output, format="mp3", bitrate=bitrate)
     return output

@@ -4,16 +4,26 @@ from unittest.mock import Mock, patch, MagicMock
 from tts import concatenate_wav, convert_to_mp3
 
 
-def test_concatenate_wav():
+@patch("tts.AudioSegment")
+def test_concatenate_wav(mock_audio_segment):
     """Test concatenating multiple WAV files."""
-    # Minimal WAV header (44 bytes) + some data
-    wav1 = b"RIFF" + b"\x00" * 40 + b"\x01\x02\x03\x04"
-    wav2 = b"RIFF" + b"\x00" * 40 + b"\x05\x06\x07\x08"
+    mock_seg1 = Mock()
+    mock_seg2 = Mock()
+    mock_combined = Mock()
+    mock_output = Mock()
 
-    result = concatenate_wav([wav1, wav2])
+    mock_audio_segment.from_file.side_effect = [mock_seg1, mock_seg2]
+    mock_seg1.__add__ = Mock(return_value=mock_combined)
 
-    assert result is not None
-    assert len(result) > len(wav1) + len(wav2)  # Header overhead
+    # Patch BytesIO to return our mock
+    with patch("tts.BytesIO") as mock_bytes_io:
+        mock_bytes_io.return_value = mock_output
+        mock_output.getvalue.return_value = b"combined_wav"
+
+        result = concatenate_wav([b"wav1", b"wav2"])
+
+    assert result == b"combined_wav"
+    assert mock_audio_segment.from_file.call_count == 2
 
 
 def test_concatenate_wav_empty():
@@ -26,7 +36,8 @@ def test_concatenate_wav_empty():
 def test_convert_to_mp3(mock_audio_segment):
     """Test converting WAV to MP3."""
     mock_wav = Mock()
-    mock_audio_segment.from_wav.return_value = mock_wav
+    mock_audio_segment.from_file.return_value = mock_wav
+    mock_wav.frame_rate = 24000
     mock_wav.export.return_value = None
 
     result = convert_to_mp3(b"fake_wav", "/tmp/output.mp3", "192k", 24000)
