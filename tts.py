@@ -2,10 +2,14 @@
 """MiMo TTS CLI Tool - Read .txt files and generate MP3 audio."""
 
 import argparse
+import base64
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+import requests
 
 
 @dataclass
@@ -61,6 +65,74 @@ def parse_text_file(content: str) -> list[Segment]:
         ))
 
     return segments
+
+
+class MiMoClient:
+    """Client for MiMo TTS API."""
+
+    def __init__(self, api_key: str, model: str = "mimo-v2.5-tts"):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = "https://api.xiaomimimo.com/v1"
+        self.max_retries = 3
+        self.initial_backoff = 2.0
+
+    def synthesize(self, segment: Segment) -> bytes:
+        """Synthesize a segment and return WAV bytes."""
+        messages = []
+        if segment.style:
+            messages.append({"role": "user", "content": segment.style})
+        messages.append({"role": "assistant", "content": segment.text})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "audio": {
+                "format": "wav",
+                "voice": segment.voice
+            }
+        }
+
+        headers = {
+            "api-key": self.api_key,
+            "Content-Type": "application/json"
+        }
+
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=60
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    audio_b64 = data["choices"][0]["message"]["audio"]["data"]
+                    return base64.b64decode(audio_b64)
+
+                if response.status_code < 500 and response.status_code != 429:
+                    raise Exception(
+                        f"API error {response.status_code}: {response.text}"
+                    )
+
+                last_error = Exception(
+                    f"API error {response.status_code}: {response.text}"
+                )
+
+            except requests.exceptions.Timeout:
+                last_error = Exception("Request timeout")
+            except requests.exceptions.ConnectionError as e:
+                last_error = Exception(f"Connection error: {e}")
+
+            if attempt < self.max_retries - 1:
+                backoff = self.initial_backoff * (2 ** attempt)
+                jitter = backoff * 0.5 * (2 * (hash(str(attempt)) % 1000) / 1000 - 1)
+                time.sleep(backoff + jitter)
+
+        raise last_error
 
 
 def parse_args():
