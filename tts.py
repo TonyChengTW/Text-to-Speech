@@ -2,17 +2,15 @@
 """MiMo TTS CLI Tool - Read .txt files and generate MP3 audio."""
 
 import argparse
-import base64
 import os
-import random
-import re
-import struct
 import sys
 import time
-from dataclasses import dataclass
+import re
+import base64
+import random
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Optional
-
 from io import BytesIO
 
 import requests

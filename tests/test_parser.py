@@ -1,5 +1,6 @@
 # tests/test_parser.py
 import pytest
+import sys
 from unittest.mock import patch, Mock
 from pathlib import Path
 from tts import parse_text_file, Segment
@@ -93,27 +94,98 @@ def test_parse_voice_resets_style():
     assert segments[1].style is None  # Style should be reset
 
 
-@patch("tts.MiMoClient")
+@patch("tts.requests.post")
 @patch("tts.concatenate_wav")
 @patch("tts.convert_to_mp3")
-def test_main_orchestration(mock_mp3, mock_concat, mock_client):
-    """Test main orchestration flow."""
-    mock_instance = Mock()
-    mock_client.return_value = mock_instance
-    mock_instance.synthesize.return_value = b"fake_wav"
+def test_main_orchestration(mock_mp3, mock_concat, mock_post):
+    """Test main orchestration: real parse_text_file, synthesize called with correct Segment."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"audio": {"data": "dGVzdA=="}}}]
+    }
+    mock_post.return_value = mock_response
     mock_concat.return_value = b"combined_wav"
     mock_mp3.return_value = Path("/tmp/output.mp3")
 
     from tts import main
-    import sys
 
-    test_args = ["tts.py", "sample.txt", "--api-key", "test-key"]
-    with patch.object(sys, "argv", test_args):
-        mock_content = "[voice:冰糖]\n你好"
-        with patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "read_text", return_value=mock_content):
-            main()
+    content = "[voice:冰糖]\n[style:用台灣口音]\n你好"
+    segments = parse_text_file(content)
+    assert len(segments) == 1
+    assert segments[0] == Segment(voice="冰糖", style="用台灣口音", text="你好")
 
-    mock_instance.synthesize.assert_called_once()
+    test_args = ["tts.py", "input.txt", "--api-key", "test-key"]
+    with patch.object(sys, "argv", test_args), \
+         patch.object(Path, "exists", return_value=True), \
+         patch.object(Path, "read_text", return_value=content):
+        main()
+
+    mock_post.assert_called_once()
     mock_concat.assert_called_once()
     mock_mp3.assert_called_once()
+
+
+@patch("tts.requests.post")
+@patch("tts.concatenate_wav")
+@patch("tts.convert_to_mp3")
+def test_main_orchestration_multiple_segments(mock_mp3, mock_concat, mock_post):
+    """Test orchestration with multiple segments calls synthesize for each."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [{"message": {"audio": {"data": "dGVzdA=="}}}]
+    }
+    mock_post.return_value = mock_response
+    mock_concat.return_value = b"combined_wav"
+    mock_mp3.return_value = Path("/tmp/output.mp3")
+
+    from tts import main
+
+    content = "[voice:冰糖]\n你好\n\n[voice:苏打]\n歡迎回來"
+    segments = parse_text_file(content)
+    assert len(segments) == 2
+
+    test_args = ["tts.py", "input.txt", "--api-key", "test-key"]
+    with patch.object(sys, "argv", test_args), \
+         patch.object(Path, "exists", return_value=True), \
+         patch.object(Path, "read_text", return_value=content):
+        main()
+
+    assert mock_post.call_count == 2
+
+
+def test_main_missing_api_key():
+    """Test main exits with code 1 when API key is missing."""
+    from tts import main
+
+    test_args = ["tts.py", "input.txt"]
+    with patch.object(sys, "argv", test_args), \
+         patch.dict("os.environ", {}, clear=True):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+
+def test_main_file_not_found():
+    """Test main exits with code 1 when file does not exist."""
+    from tts import main
+
+    test_args = ["tts.py", "nonexistent.txt", "--api-key", "test-key"]
+    with patch.object(sys, "argv", test_args):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+
+def test_main_empty_file():
+    """Test main exits with code 0 when file is empty."""
+    from tts import main
+
+    test_args = ["tts.py", "empty.txt", "--api-key", "test-key"]
+    with patch.object(sys, "argv", test_args), \
+         patch.object(Path, "exists", return_value=True), \
+         patch.object(Path, "read_text", return_value=""):
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 0
