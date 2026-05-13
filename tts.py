@@ -4,6 +4,7 @@
 import argparse
 import base64
 import random
+import re
 import struct
 import sys
 import time
@@ -168,6 +169,41 @@ def convert_to_mp3(wav_bytes: bytes, output_path: str, bitrate: str, sample_rate
     output = Path(output_path)
     audio.export(output, format="mp3", bitrate=bitrate)
     return output
+
+
+def chunk_text(text: str, chunk_size: int) -> list[str]:
+    """Split text into chunks at sentence boundaries."""
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    current_chunk = ""
+
+    # Split at Chinese and English sentence boundaries
+    sentence_pattern = r'(?<=[。！？.!?])\s*'
+    sentences = re.split(sentence_pattern, text)
+
+    for sentence in sentences:
+        if not sentence.strip():
+            continue
+
+        # Single sentence longer than chunk_size — flush and add as its own chunk
+        if len(sentence) > chunk_size:
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            chunks.append(sentence.strip())
+            continue
+
+        # Always break at sentence boundaries when total text exceeds chunk_size
+        if current_chunk:
+            chunks.append(current_chunk.strip())
+        current_chunk = sentence
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return chunks if chunks else [text]
 
 
 def parse_args():
