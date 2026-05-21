@@ -10,7 +10,7 @@ def test_client_initialization():
     client = MiMoClient(api_key="test-key", model="mimo-v2.5-tts")
     assert client.api_key == "test-key"
     assert client.model == "mimo-v2.5-tts"
-    assert client.base_url == "https://api.xiaomimimo.com/v1"
+    assert client.base_url == "https://token-plan-cn.xiaomimimo.com/v1"
 
 
 @patch("tts.requests.post")
@@ -30,7 +30,7 @@ def test_synthesize_with_style(mock_post):
     assert result is not None
     mock_post.assert_called_once()
     call_args = mock_post.call_args
-    assert call_args[1]["headers"]["api-key"] == "test-key"
+    assert call_args[1]["headers"]["Authorization"] == "Bearer test-key"
     assert call_args[1]["json"]["messages"][0]["role"] == "user"
     assert call_args[1]["json"]["messages"][1]["role"] == "assistant"
 
@@ -143,3 +143,98 @@ def test_synthesize_builtin_voice_still_works(mock_post):
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["json"]["model"] == "mimo-v2.5-tts"
     assert mock_post.call_args.kwargs["json"]["audio"]["voice"] == "冰糖"
+
+
+from tts import GeminiTTSClient, TTSClientFactory
+import base64
+
+@patch("tts.requests.post")
+@patch("tts.GeminiTTSClient._pcm_to_wav")
+def test_gemini_synthesize_success(mock_pcm_to_wav, mock_post):
+    """Test Gemini synthesize decodes base64 and converts to WAV."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "inlineData": {
+                        "data": "ZmFrZV9wY21fZGF0YQ=="
+                    }
+                }]
+            }
+        }]
+    }
+    mock_post.return_value = mock_response
+    mock_pcm_to_wav.return_value = b"fake_wav_data"
+
+    client = GeminiTTSClient(api_key="gemini-key")
+    segment = Segment(voice="冰糖", style=None, text="測試")
+    result = client.synthesize(segment)
+
+    assert result == b"fake_wav_data"
+    mock_post.assert_called_once()
+    assert mock_post.call_args.kwargs["headers"]["x-goog-api-key"] == "gemini-key"
+    assert mock_post.call_args.kwargs["json"]["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Aoede"
+
+
+@patch("tts.requests.post")
+def test_gemini_rejects_clone(mock_post):
+    """Test Gemini rejects clone segments."""
+    client = GeminiTTSClient(api_key="gemini-key")
+    segment = Segment(voice="clone:test", style=None, text="測試")
+
+    with pytest.raises(ValueError) as exc_info:
+        client.synthesize(segment)
+    
+    assert "not supported" in str(exc_info.value).lower()
+    mock_post.assert_not_called()
+
+
+@patch("tts.requests.post")
+@patch("tts.GeminiTTSClient._pcm_to_wav")
+def test_gemini_style_injection(mock_pcm_to_wav, mock_post):
+    """Test style is prepended to text."""
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "candidates": [{"content": {"parts": [{"inlineData": {"data": "YWJj"}}]}}]
+    }
+    mock_post.return_value = mock_response
+
+    client = GeminiTTSClient(api_key="gemini-key")
+    segment = Segment(voice="冰糖", style="開心", text="測試")
+    client.synthesize(segment)
+
+    call_args = mock_post.call_args
+    assert call_args.kwargs["json"]["contents"][0]["parts"][0]["text"] == "開心。測試"
+
+
+def test_factory_creates_mimo_client():
+    client = TTSClientFactory.create(model="mimo-v2.5-tts", mimo_api_key="mimo-key", gemini_api_key=None)
+    assert isinstance(client, MiMoClient)
+    assert client.api_key == "mimo-key"
+
+
+def test_factory_creates_gemini_client():
+    client = TTSClientFactory.create(model="gemini-2.5-flash-preview-tts", mimo_api_key=None, gemini_api_key="gemini-key")
+    assert isinstance(client, GeminiTTSClient)
+    assert client.api_key == "gemini-key"
+
+
+def test_factory_missing_mimo_key():
+    with pytest.raises(ValueError) as exc:
+        TTSClientFactory.create(model="mimo-v2.5-tts", mimo_api_key=None, gemini_api_key="gemini-key")
+    assert "TTS_API_KEY" in str(exc.value)
+
+
+def test_factory_missing_gemini_key():
+    with pytest.raises(ValueError) as exc:
+        TTSClientFactory.create(model="gemini-2.5-flash-preview-tts", mimo_api_key="mimo-key", gemini_api_key=None)
+    assert "GEMINI_API_KEY" in str(exc.value)
+
+
+def test_factory_unknown_model():
+    with pytest.raises(ValueError) as exc:
+        TTSClientFactory.create(model="invalid-model", mimo_api_key="mimo-key", gemini_api_key="gemini-key")
+    assert "Unknown model 'invalid-model'" in str(exc.value)

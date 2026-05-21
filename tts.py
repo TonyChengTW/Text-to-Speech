@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """MiMo TTS CLI Tool - Read .txt files and generate MP3 audio."""
 
+__version__ = "1.1.0"
+
 import argparse
 import os
 import sys
@@ -10,8 +12,32 @@ import base64
 import random
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Optional, Union
+
+VOICE_MAPPING = {
+    "蘇打": "苏打",
+    "白樺": "白桦",
+}
+
+GEMINI_VOICE_MAPPING = {
+    "冰糖": "Aoede",
+    "茉莉": "Kore",
+    "蘇打": "Puck",
+    "白樺": "Charon",
+    "Mia": "Leda",
+    "Chloe": "Sulafat",
+    "Milo": "Fenrir",
+    "Dean": "Enceladus",
+    "mimo_default": "Aoede",
+}
+
+GEMINI_MODELS = {"gemini-2.5-flash-preview-tts", "gemini-2.0-flash-preview-tts", "gemini-2.5-flash-tts"}
+MIMO_MODELS = {"mimo-v2.5-tts"}
+
+DEFAULT_STYLE = "語調自然，不要用中國大陸捲舌腔調"
 from io import BytesIO
+from typing import Optional, Union
+import wave
+from abc import ABC, abstractmethod
 
 import requests
 from pydub import AudioSegment
@@ -28,7 +54,7 @@ class Segment:
 class ProfileManager:
     """Manages voice clone profiles in the profiles/ directory."""
 
-    SUPPORTED_FORMATS = {".mp3": "audio/mpeg", ".wav": "audio/wav"}
+    SUPPORTED_FORMATS = {".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/x-m4a"}
 
     def __init__(self, profiles_dir: Union[str, Path] = "profiles"):
         self.profiles_dir = Path(profiles_dir)
@@ -48,7 +74,7 @@ class ProfileManager:
             raise ValueError(f"Invalid audio: {e}")
 
     def add_profile(self, name: str, audio_path: str) -> dict:
-        """Add a voice clone profile. Copies audio to profiles_dir."""
+        """Add a voice clone profile. Converts audio to mp3 if needed."""
         self._ensure_dir()
         if self.profile_exists(name):
             raise ValueError(f"Profile '{name}' already exists")
@@ -56,15 +82,19 @@ class ProfileManager:
         self._validate_audio(audio_path)
         src_path = Path(audio_path)
         ext = src_path.suffix.lower()
-        dest_audio = self.profiles_dir / f"{name}{ext}"
+        dest_audio = self.profiles_dir / f"{name}.mp3"
 
-        import shutil
-        shutil.copy2(src_path, dest_audio)
+        if ext == ".m4a":
+            audio = AudioSegment.from_file(audio_path)
+            audio.export(dest_audio, format="mp3", bitrate="192k")
+        else:
+            import shutil
+            shutil.copy2(src_path, dest_audio)
 
         from datetime import date
         profile = {
             "name": name,
-            "audio_file": f"{name}{ext}",
+            "audio_file": f"{name}.mp3",
             "created_at": date.today().isoformat(),
         }
         json_path = self.profiles_dir / f"{name}.json"
@@ -176,13 +206,20 @@ def parse_text_file(content: str) -> list[Segment]:
     return segments
 
 
-class MiMoClient:
+class BaseTTSClient(ABC):
+    @abstractmethod
+    def synthesize(self, segment: Segment) -> bytes:
+        """Synthesize a segment and return WAV bytes."""
+        raise NotImplementedError
+
+
+class MiMoClient(BaseTTSClient):
     """Client for MiMo TTS API."""
 
     def __init__(self, api_key: str, model: str = "mimo-v2.5-tts", profile_manager=None):
         self.api_key = api_key
         self.model = model
-        self.base_url = "https://api.xiaomimimo.com/v1"
+        self.base_url = "https://token-plan-cn.xiaomimimo.com/v1"
         self.max_retries = 3
         self.initial_backoff = 2.0
         self.profile_manager = profile_manager if profile_manager is not None else ProfileManager()
@@ -202,14 +239,21 @@ class MiMoClient:
                 audio_path = self.profile_manager.get_audio_path(profile_name)
             except FileNotFoundError as e:
                 raise ValueError(f"Clone profile '{profile_name}' not found: {e}")
-            with open(audio_path, "rb") as f:
-                audio_b64 = base64.b64encode(f.read()).decode("utf-8")
             ext = audio_path.suffix.lower()
-            mime = "audio/mpeg" if ext == ".mp3" else "audio/wav"
+            if ext == ".m4a":
+                audio = AudioSegment.from_file(audio_path)
+                audio_bytes = BytesIO()
+                audio.export(audio_bytes, format="mp3")
+                audio_b64 = base64.b64encode(audio_bytes.getvalue()).decode("utf-8")
+                mime = "audio/mpeg"
+            else:
+                with open(audio_path, "rb") as f:
+                    audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+                mime = "audio/mpeg" if ext == ".mp3" else "audio/wav"
             voice_value = f"data:{mime};base64,{audio_b64}"
             model_name = "mimo-v2.5-tts-voiceclone"
         else:
-            voice_value = segment.voice
+            voice_value = VOICE_MAPPING.get(segment.voice, segment.voice)
             model_name = self.model
 
         payload = {
@@ -222,7 +266,7 @@ class MiMoClient:
         }
 
         headers = {
-            "api-key": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
 
@@ -233,7 +277,7 @@ class MiMoClient:
                     f"{self.base_url}/chat/completions",
                     json=payload,
                     headers=headers,
-                    timeout=60
+                    timeout=600
                 )
 
                 if response.status_code == 200:
@@ -261,6 +305,119 @@ class MiMoClient:
                 time.sleep(sleep_time)
 
         raise last_error
+
+
+class GeminiTTSClient(BaseTTSClient):
+    """Client for Gemini TTS API."""
+
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash-preview-tts"):
+        self.api_key = api_key
+        self.model = model
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        self.max_retries = 3
+        self.initial_backoff = 2.0
+
+    def _pcm_to_wav(self, pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
+        buf = BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_bytes)
+        return buf.getvalue()
+
+    def synthesize(self, segment: Segment) -> bytes:
+        is_clone = segment.voice.startswith("clone:")
+        if is_clone:
+            raise ValueError("Voice cloning is not supported with Gemini TTS")
+
+        voice_name = GEMINI_VOICE_MAPPING.get(segment.voice, "Aoede")
+        
+        prompt_text = segment.text
+        if segment.style:
+            prompt_text = f"{segment.style}。{segment.text}"
+
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt_text}]
+            }],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {
+                        "prebuiltVoiceConfig": {
+                            "voiceName": voice_name
+                        }
+                    }
+                }
+            }
+        }
+
+        headers = {
+            "x-goog-api-key": self.api_key,
+            "Content-Type": "application/json"
+        }
+
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/{self.model}:generateContent",
+                    json=payload,
+                    headers=headers,
+                    timeout=600
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        raise Exception("No candidates in Gemini response")
+                    
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if not parts or "inlineData" not in parts[0]:
+                        raise Exception("No audio data in Gemini response")
+                        
+                    audio_b64 = parts[0]["inlineData"]["data"]
+                    pcm_bytes = base64.b64decode(audio_b64)
+                    return self._pcm_to_wav(pcm_bytes)
+
+                if response.status_code < 500 and response.status_code != 429:
+                    raise Exception(
+                        f"API error {response.status_code}: {response.text}"
+                    )
+
+                last_error = Exception(
+                    f"API error {response.status_code}: {response.text}"
+                )
+
+            except requests.exceptions.Timeout:
+                last_error = Exception("Request timeout")
+            except requests.exceptions.ConnectionError as e:
+                last_error = Exception(f"Connection error: {e}")
+
+            if attempt < self.max_retries - 1:
+                backoff = self.initial_backoff * (2 ** attempt)
+                sleep_time = random.uniform(0, backoff)
+                time.sleep(sleep_time)
+
+        raise last_error
+
+
+class TTSClientFactory:
+    @staticmethod
+    def create(model: str, mimo_api_key: Optional[str] = None, gemini_api_key: Optional[str] = None, profile_manager=None) -> BaseTTSClient:
+        if model in GEMINI_MODELS:
+            if not gemini_api_key:
+                raise ValueError("Gemini model selected but GEMINI_API_KEY is not set.")
+            return GeminiTTSClient(api_key=gemini_api_key, model=model)
+        elif model in MIMO_MODELS:
+            if not mimo_api_key:
+                raise ValueError("MiMo model selected but TTS_API_KEY is not set.")
+            return MiMoClient(api_key=mimo_api_key, model=model, profile_manager=profile_manager)
+        else:
+            supported = ", ".join(sorted(GEMINI_MODELS | MIMO_MODELS))
+            raise ValueError(f"Unknown model '{model}'. Supported models are: {supported}")
 
 
 def concatenate_wav(wav_list: list[bytes]) -> Optional[bytes]:
@@ -330,27 +487,96 @@ def chunk_text(text: str, chunk_size: int) -> list[str]:
 
 def parse_args():
     """Parse command line arguments."""
+    raw = sys.argv[1:]
+    clone_mode = "--clone-profile" in raw
+
     parser = argparse.ArgumentParser(
         description="Generate MP3 audio from .txt files using MiMo TTS API"
     )
-    parser.add_argument("input", type=Path, help="Input .txt file path")
-    parser.add_argument("--api-key", help="API key (or set TTS_API_KEY env var)")
-    parser.add_argument("--model", default="mimo-v2.5-tts", help="Model name")
-    parser.add_argument("--output", type=Path, help="Output MP3 path")
-    parser.add_argument("--chunk-size", type=int, default=4000, help="Max chars per API request")
-    parser.add_argument("--sample-rate", type=int, default=24000, help="Audio sample rate")
-    parser.add_argument("--bitrate", default="192k", help="MP3 bitrate")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Show progress")
+    if clone_mode:
+        parser.add_argument("--clone-profile", action="store_true")
+        parser.add_argument("subcommand", choices=["add", "list", "delete"])
+        parser.add_argument("clone_profile_name", nargs="?")
+        parser.add_argument("--audio", dest="clone_profile_audio")
+        parser.add_argument("input", nargs="?", type=Path)
+        parser.add_argument("--api-key")
+        parser.add_argument("--gemini-api-key")
+        parser.add_argument("--model", default="mimo-v2.5-tts")
+        parser.add_argument("--output", type=Path)
+        parser.add_argument("--chunk-size", type=int, default=4000)
+        parser.add_argument("--sample-rate", type=int, default=24000)
+        parser.add_argument("--bitrate", default="192k")
+        parser.add_argument("-v", "--verbose", action="store_true")
+    else:
+        parser.add_argument("input", nargs="?", type=Path)
+        parser.add_argument("--api-key")
+        parser.add_argument("--gemini-api-key")
+        parser.add_argument("--model", default="mimo-v2.5-tts")
+        parser.add_argument("--output", type=Path)
+        parser.add_argument("--chunk-size", type=int, default=4000)
+        parser.add_argument("--sample-rate", type=int, default=24000)
+        parser.add_argument("--bitrate", default="192k")
+        parser.add_argument("-v", "--verbose", action="store_true")
+        parser.add_argument("--clone-profile", action="store_true")
+        parser.add_argument("subcommand", nargs="?", choices=["add", "list", "delete"])
+        parser.add_argument("clone_profile_name", nargs="?")
+        parser.add_argument("--audio", dest="clone_profile_audio")
+
     return parser.parse_args()
 
 
 def main():
     """Main entry point."""
-    args = parse_args()
+    from dotenv import dotenv_values
+    env_vars = dotenv_values(".env")
 
-    api_key = args.api_key or os.environ.get("TTS_API_KEY")
-    if not api_key:
-        print("Error: API key required. Use --api-key or set TTS_API_KEY env var", file=sys.stderr)
+    args = parse_args()
+    profile_manager = ProfileManager()
+
+    if args.clone_profile:
+        if not args.subcommand:
+            print("錯誤：需要 subcommand (add/list/delete)", file=sys.stderr)
+            sys.exit(1)
+        action = args.subcommand
+
+        if action == "add":
+            if not args.clone_profile_name or not args.clone_profile_audio:
+                print("錯誤：add 需要 <name> 和 --audio", file=sys.stderr)
+                sys.exit(1)
+            try:
+                profile = profile_manager.add_profile(args.clone_profile_name, args.clone_profile_audio)
+                print(f"已建立 profile：{profile['name']} ({profile['audio_file']})")
+            except ValueError as e:
+                print(f"錯誤：{e}", file=sys.stderr)
+                sys.exit(1)
+            sys.exit(0)
+
+        if action == "list":
+            profiles = profile_manager.list_profiles()
+            if not profiles:
+                print("尚無 clone profiles")
+            else:
+                for p in profiles:
+                    print(f"{p['name']}  | {p['audio_file']} | {p['created_at']}")
+            sys.exit(0)
+
+        if action == "delete":
+            if not args.clone_profile_name:
+                print("錯誤：delete 需要 <name>", file=sys.stderr)
+                sys.exit(1)
+            try:
+                profile_manager.delete_profile(args.clone_profile_name)
+                print(f"已刪除 profile：{args.clone_profile_name}")
+            except FileNotFoundError as e:
+                print(f"錯誤：{e}", file=sys.stderr)
+                sys.exit(1)
+            sys.exit(0)
+
+    mimo_api_key = args.api_key or os.environ.get("TTS_API_KEY") or env_vars.get("TTS_API_KEY")
+    gemini_api_key = args.gemini_api_key or os.environ.get("GEMINI_API_KEY") or env_vars.get("GEMINI_API_KEY")
+
+    if not args.input:
+        print("Error: input file required (or use --clone-profile add/list/delete for profile management)", file=sys.stderr)
         sys.exit(1)
 
     if not args.input.exists():
@@ -367,7 +593,16 @@ def main():
         print(f"Warning: No segments found in {args.input}", file=sys.stderr)
         sys.exit(0)
 
-    client = MiMoClient(api_key=api_key, model=args.model)
+    try:
+        client = TTSClientFactory.create(
+            model=args.model,
+            mimo_api_key=mimo_api_key,
+            gemini_api_key=gemini_api_key,
+            profile_manager=profile_manager
+        )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     wav_files = []
     total_time = 0
@@ -398,7 +633,9 @@ def main():
             except Exception as e:
                 if args.verbose:
                     print(f" → FAILED: {e}")
-                raise
+                else:
+                    print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
 
     if wav_files:
         combined_wav = concatenate_wav(wav_files)

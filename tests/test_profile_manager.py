@@ -35,18 +35,19 @@ class TestAddProfile:
 
         result = pm.add_profile("test_voice", str(valid_audio_file))
 
+        from datetime import date
         assert result["name"] == "test_voice"
-        assert result["audio_file"] == "test_voice.wav"
-        assert result["created_at"] == "2026-05-14"
+        assert result["audio_file"] == "test_voice.mp3"
+        assert result["created_at"] == date.today().isoformat()
 
         json_path = temp_profiles_dir / "test_voice.json"
         assert json_path.exists()
         with open(json_path, encoding="utf-8") as f:
             profile = json.load(f)
             assert profile["name"] == "test_voice"
-            assert profile["audio_file"] == "test_voice.wav"
+            assert profile["audio_file"] == "test_voice.mp3"
 
-        audio_dest = temp_profiles_dir / "test_voice.wav"
+        audio_dest = temp_profiles_dir / "test_voice.mp3"
         assert audio_dest.exists()
 
     @patch("tts.AudioSegment")
@@ -133,7 +134,7 @@ class TestGetAudioPath:
 
         audio_path = pm.get_audio_path("voice1")
 
-        assert audio_path == temp_profiles_dir / "voice1.wav"
+        assert audio_path == temp_profiles_dir / "voice1.mp3"
         assert audio_path.exists()
 
     def test_get_audio_path_missing_profile(self, temp_profiles_dir):

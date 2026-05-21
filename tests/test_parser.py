@@ -231,3 +231,38 @@ def test_parse_clone_inline_not_treated_as_clone():
     segments = parse_text_file(content)
     assert len(segments) == 1
     assert segments[0].voice == "mimo_default"
+
+
+def test_args_clone_profile_add():
+    from tts import parse_args
+    with patch.object(sys, "argv", ["tts.py", "--clone-profile", "add", "my_voice", "--audio", "test.mp3"]):
+        args = parse_args()
+    assert args.clone_profile is True
+    assert args.subcommand == "add"
+    assert args.clone_profile_name == "my_voice"
+    assert args.clone_profile_audio == "test.mp3"
+
+
+def test_args_clone_profile_list():
+    from tts import parse_args
+    with patch.object(sys, "argv", ["tts.py", "--clone-profile", "list"]):
+        args = parse_args()
+    assert args.clone_profile is True
+    assert args.subcommand == "list"
+
+
+def test_args_clone_profile_delete():
+    from tts import parse_args
+    with patch.object(sys, "argv", ["tts.py", "--clone-profile", "delete", "old_voice"]):
+        args = parse_args()
+    assert args.clone_profile is True
+    assert args.subcommand == "delete"
+    assert args.clone_profile_name == "old_voice"
+
+
+def test_args_no_clone_profile_returns_none():
+    from tts import parse_args
+    with patch.object(sys, "argv", ["tts.py", "input.txt"]):
+        args = parse_args()
+    assert args.clone_profile is False
+    assert args.subcommand is None

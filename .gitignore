@@ -1,0 +1,18 @@
+# Environment
+.env
+.env.example
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.DS_Store
+.obsidian/
+
+# Output
+*.mp3
+profiles/
