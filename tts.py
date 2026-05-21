@@ -19,21 +19,21 @@ VOICE_MAPPING = {
 }
 
 GEMINI_VOICE_MAPPING = {
-    "冰糖": "Aoede",
-    "茉莉": "Kore",
-    "蘇打": "Puck",
-    "白樺": "Charon",
-    "Mia": "Leda",
-    "Chloe": "Sulafat",
-    "Milo": "Fenrir",
-    "Dean": "Enceladus",
-    "mimo_default": "Aoede",
+    "Aoede": "aoede",
+    "Kore": "kore",
+    "Puck": "puck",
+    "Charon": "charon",
+    "Leda": "leda",
+    "Sulafat": "sulafat",
+    "Fenrir": "fenrir",
+    "Enceladus": "enceladus",
+    "mimo_default": "aoede",
 }
 
-GEMINI_MODELS = {"gemini-2.5-flash-preview-tts", "gemini-2.0-flash-preview-tts", "gemini-2.5-flash-tts"}
+GEMINI_MODELS = {"gemini-2.5-flash-preview-tts", "gemini-3.1-flash-tts-preview"}
 MIMO_MODELS = {"mimo-v2.5-tts"}
 
-DEFAULT_STYLE = "語調自然，不要用中國大陸捲舌腔調"
+DEFAULT_STYLE = "語調自然，台灣腔，不要用中國大陸捲舌腔調"
 from io import BytesIO
 from typing import Optional, Union
 import wave
